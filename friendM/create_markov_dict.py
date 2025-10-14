@@ -3,34 +3,17 @@ import random
 import configparser
 import sys
 import os
-import re
+import json # JSONを扱うために追加
 from collections import defaultdict
 
 def parse_text_to_words(tagger, text):
-    """
-    MeCabを使って文章を単語のリストに分割する。
-    この際、不要な記号の組み合わせを除外するフィルタリングを行う。
-    """
+    """MeCabを使って文章を単語のリストに分割する"""
     node = tagger.parseToNode(text)
     words = []
-    
-    # 辞書に含めたい単独の記号をここに定義する
-    allowed_symbols = {'、', '。', '！', '？', '(', ')', '（', '）', '「', '」', '…'}
-    
     while node:
         word = node.surface
-        if not word or node.posid == 0: # 空のノードやBOS/EOSノードはスキップ
-            node = node.next
-            continue
-        
-        # ルール1: 単語が、許可された単独の記号リストに含まれていれば採用
-        if word in allowed_symbols:
+        if word and node.posid != 0:
             words.append(word)
-        # ルール2: 単語に、ひらがな、カタカナ、漢字、英数字が「1文字でも」含まれていれば採用
-        elif re.search(r'[ぁ-んァ-ン一-龠a-zA-Z0-9]', word):
-            words.append(word)
-        # 上記のルールに当てはまらない、複数の記号が連続しただけの単語などは無視する
-        
         node = node.next
     return words
 
@@ -39,7 +22,7 @@ def create_config_template(config_path):
     config = configparser.ConfigParser()
     config['Files'] = {
         'response_path': 'response.txt',
-        'content_path': 'content.txt',
+        'content_path': 'content.json', # デフォルトを.jsonに変更
         'transition_path': 'transition.txt',
         'output_wordlist_path': 'MarkovWordList.txt',
         'output_intdict_path': 'MarkovIntDictionary.txt'
@@ -81,13 +64,28 @@ def main():
         sys.exit(1)
 
     try:
-        print("テキストファイルを読み込んでいます...")
+        print("テキストファイルとJSONファイルを読み込んでいます...")
+        # responseとtransitionは従来通りテキストファイルから読み込む
         with open(response_path, 'r', encoding='utf-8') as f:
             response_lines = [line.strip() for line in f if line.strip()]
-        with open(content_path, 'r', encoding='utf-8') as f:
-            content_lines = [line.strip() for line in f if line.strip()]
         with open(transition_path, 'r', encoding='utf-8') as f:
             transition_lines = [line.strip() for line in f if line.strip()]
+
+        # ▼▼▼ content の読み込み部分を変更 ▼▼▼
+        try:
+            with open(content_path, 'r', encoding='utf-8') as f:
+                content_lines = json.load(f)
+            # JSONの形式が文字列の配列であることを確認
+            if not isinstance(content_lines, list) or not all(isinstance(item, str) for item in content_lines):
+                raise TypeError("JSONファイルは文字列の配列（[\"文1\", \"文2\", ...\"]の形式）である必要があります。")
+        except json.JSONDecodeError:
+            print(f"エラー: '{content_path}' のJSON形式が正しくありません。", file=sys.stderr)
+            sys.exit(1)
+        except TypeError as e:
+            print(f"エラー: '{content_path}' の内容が不正です。 {e}", file=sys.stderr)
+            sys.exit(1)
+        # ▲▲▲ ここまで変更 ▲▲▲
+
     except FileNotFoundError as e:
         print(f"ファイルが見つかりません: {e.filename}", file=sys.stderr)
         sys.exit(1)
@@ -96,9 +94,6 @@ def main():
         print("エラー: いずれかの入力ファイルが空です。", file=sys.stderr)
         sys.exit(1)
     
-    # ▼▼▼ここから処理フローを変更▼▼▼
-    
-    # 毎回同じ組み合わせにならないよう、返答と繋ぎのリストをシャッフル
     random.shuffle(response_lines)
     random.shuffle(transition_lines)
 
@@ -108,10 +103,8 @@ def main():
     len_tra = len(transition_lines)
 
     for i in range(combinations):
-        # response と transition はリストを巡回して均等に使う
         res = response_lines[i % len_res]
         tra = transition_lines[i % len_tra]
-        # content はランダムに選択
         con = random.choice(content_lines)
         
         res_words = parse_text_to_words(tagger, res)
@@ -125,8 +118,6 @@ def main():
 
     print("\n後処理を開始します...")
     
-    # ▲▲▲ここまで処理フローを変更▲▲▲
-
     LINK_TOKEN_RC = "__LINK_Response_Content__"
     LINK_TOKEN_CT = "__LINK_Content_Transition__"
 
