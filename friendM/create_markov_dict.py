@@ -11,16 +11,17 @@ def parse_text_to_words(tagger, text):
     words = []
     while node:
         word = node.surface
-        if word and node.posid != 0:
+        if word and node.posid != 0: # MeCab自身のBOS/EOSノードはスキップ
             words.append(word)
         node = node.next
     return words
 
 def create_triplets_from_words(words):
-    """単語リストからマルコフ連鎖用の3単語の組を作成する"""
+    """単語リストからマルコフ連鎖用の3単語の組を作成する（BOS/EOSトークンを含む）"""
     if len(words) < 2:
         return []
     
+    # この関数内でBOS/EOSトークンを追加する
     tokens = ["@BOS@"] + words + ["@EOS@"]
     
     triplets = []
@@ -91,9 +92,12 @@ def main():
     if not all([response_lines, content_lines, transition_lines]):
         print("エラー: いずれかの入力ファイルが空です。", file=sys.stderr)
         sys.exit(1)
+    
+    # ▼▼▼ここから処理フローを変更▼▼▼
 
-    print(f"{combinations}通りの会話パターンから辞書を生成します...")
-    all_triplets = []
+    # 1. 最初にすべての文章を形態素解析し、単語のリストとして保持する
+    print(f"{combinations}通りの会話パターンを生成し、形態素解析します...")
+    all_sentences_as_words = []
     for i in range(combinations):
         res = random.choice(response_lines)
         con = random.choice(content_lines)
@@ -101,15 +105,22 @@ def main():
         
         combined_text = f"{res} {con} {tra}"
         words = parse_text_to_words(tagger, combined_text)
-        triplets = create_triplets_from_words(words)
-        all_triplets.extend(triplets)
+        all_sentences_as_words.append(words)
         
         if (i + 1) % 500 == 0:
-            print(f"  {i + 1}/{combinations} 処理完了...")
+            print(f"  {i + 1}/{combinations} 形態素解析 処理完了...")
+
+    # 2. (後処理) 形態素解析後の全単語リストから、マルコフ連鎖の3単語の組を作成する
+    print("\n形態素解析後のデータからマルコフ連鎖の組を作成します... (後処理)")
+    all_triplets = []
+    for words in all_sentences_as_words:
+        triplets = create_triplets_from_words(words)
+        all_triplets.extend(triplets)
     
-    # 1. ユニークな単語をすべて抽出し、IDを割り振る
+    # ▲▲▲ここまで処理フローを変更▲▲▲
+
     print("ユニークな単語リストを作成しています...")
-    all_words = set(["@BOS@", "@EOS@"]) # 特殊トークンを必ず含める
+    all_words = set(["@BOS@", "@EOS@"])
     for w1, w2, w3 in all_triplets:
         all_words.add(w1)
         all_words.add(w2)
@@ -118,11 +129,9 @@ def main():
     id_to_word = sorted(list(all_words))
     word_to_id = {word: i for i, word in enumerate(id_to_word)}
 
-    # 2. 整数ベースの辞書と開始単語リストを構築
     print("整数ベースの辞書を構築しています...")
     int_markov_data = defaultdict(list)
     start_word_ids = set()
-    bos_id = word_to_id["@BOS@"]
 
     for w1, w2, w3 in all_triplets:
         if w1 == "@BOS@":
@@ -132,11 +141,9 @@ def main():
         id2 = word_to_id[w2]
         id3 = word_to_id[w3]
         
-        # 2つのintを1つのlongにパック
         long_key = (id1 << 32) | id2
         int_markov_data[long_key].append(id3)
 
-    # 3. MarkovWordList.txt を生成
     print(f"'{output_wordlist_path}' を書き込んでいます...")
     try:
         with open(output_wordlist_path, 'w', encoding='utf-8') as f:
@@ -145,21 +152,18 @@ def main():
         print(f"ファイルの書き込みに失敗しました: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # 4. MarkovIntDictionary.txt を生成
     print(f"'{output_intdict_path}' を書き込んでいます...")
     try:
         with open(output_intdict_path, 'w', encoding='utf-8') as f:
-            # 1行目: 開始単語のIDリスト
             f.write(','.join(map(str, sorted(list(start_word_ids)))) + '\n')
             
-            # 2行目以降: 整数辞書 (キーでソートして出力)
             sorted_keys = sorted(int_markov_data.keys())
             for key in sorted_keys:
                 value_ids = int_markov_data[key]
                 id1 = key >> 32
-                id2 = key & 0xFFFFFFFF  # 符号なし32bitとして扱う
+                id2 = key & 0xFFFFFFFF
                 
-                value_str = ','.join(map(str, sorted(list(set(value_ids))))) # 重複を除いてソート
+                value_str = ','.join(map(str, sorted(list(set(value_ids)))))
                 f.write(f"{id1},{id2}|{value_str}\n")
     except IOError as e:
         print(f"ファイルの書き込みに失敗しました: {e}", file=sys.stderr)
@@ -168,7 +172,6 @@ def main():
     print(f"\n完了しました！ 2つの辞書ファイルを生成しました。")
     print(f"- 単語リスト: {output_wordlist_path} ({len(id_to_word)}単語)")
     print(f"- 整数辞書: {output_intdict_path} ({len(int_markov_data)}キー)")
-
 
 if __name__ == '__main__':
     main()
