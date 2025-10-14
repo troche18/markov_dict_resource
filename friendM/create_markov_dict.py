@@ -3,16 +3,34 @@ import random
 import configparser
 import sys
 import os
+import re
 from collections import defaultdict
 
 def parse_text_to_words(tagger, text):
-    """MeCabを使って文章を単語のリストに分割する"""
+    """
+    MeCabを使って文章を単語のリストに分割する。
+    この際、不要な記号の組み合わせを除外するフィルタリングを行う。
+    """
     node = tagger.parseToNode(text)
     words = []
+    
+    # 辞書に含めたい単独の記号をここに定義する
+    allowed_symbols = {'、', '。', '！', '？', '(', ')', '（', '）', '「', '」', '…'}
+    
     while node:
         word = node.surface
-        if word and node.posid != 0:
+        if not word or node.posid == 0: # 空のノードやBOS/EOSノードはスキップ
+            node = node.next
+            continue
+        
+        # ルール1: 単語が、許可された単独の記号リストに含まれていれば採用
+        if word in allowed_symbols:
             words.append(word)
+        # ルール2: 単語に、ひらがな、カタカナ、漢字、英数字が「1文字でも」含まれていれば採用
+        elif re.search(r'[ぁ-んァ-ン一-龠a-zA-Z0-9]', word):
+            words.append(word)
+        # 上記のルールに当てはまらない、複数の記号が連続しただけの単語などは無視する
+        
         node = node.next
     return words
 
