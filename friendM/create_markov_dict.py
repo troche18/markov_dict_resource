@@ -11,25 +11,10 @@ def parse_text_to_words(tagger, text):
     words = []
     while node:
         word = node.surface
-        if word and node.posid != 0: # MeCab自身のBOS/EOSノードはスキップ
+        if word and node.posid != 0:
             words.append(word)
         node = node.next
     return words
-
-def create_triplets_from_words(words):
-    """単語リストからマルコフ連鎖用の3単語の組を作成する（BOS/EOSトークンを含む）"""
-    if len(words) < 2:
-        return []
-    
-    # この関数内でBOS/EOSトークンを追加する
-    tokens = ["@BOS@"] + words + ["@EOS@"]
-    
-    triplets = []
-    for i in range(len(tokens) - 2):
-        w1, w2, w3 = tokens[i], tokens[i+1], tokens[i+2]
-        triplets.append((w1, w2, w3))
-        
-    return triplets
 
 def create_config_template(config_path):
     """設定ファイルのテンプレートを生成する"""
@@ -94,33 +79,52 @@ def main():
         sys.exit(1)
     
     # ▼▼▼ここから処理フローを変更▼▼▼
+    
+    # 毎回同じ組み合わせにならないよう、返答と繋ぎのリストをシャッフル
+    random.shuffle(response_lines)
+    random.shuffle(transition_lines)
 
-    # 1. 最初にすべての文章を形態素解析し、単語のリストとして保持する
-    print(f"{combinations}通りの会話パターンを生成し、形態素解析します...")
-    all_sentences_as_words = []
+    print(f"{combinations}通りの会話パターンを形態素解析します...")
+    all_sentence_parts = []
+    len_res = len(response_lines)
+    len_tra = len(transition_lines)
+
     for i in range(combinations):
-        res = random.choice(response_lines)
+        # response と transition はリストを巡回して均等に使う
+        res = response_lines[i % len_res]
+        tra = transition_lines[i % len_tra]
+        # content はランダムに選択
         con = random.choice(content_lines)
-        tra = random.choice(transition_lines)
         
-        combined_text = f"{res} {con} {tra}"
-        words = parse_text_to_words(tagger, combined_text)
-        all_sentences_as_words.append(words)
+        res_words = parse_text_to_words(tagger, res)
+        con_words = parse_text_to_words(tagger, con)
+        tra_words = parse_text_to_words(tagger, tra)
+        
+        all_sentence_parts.append((res_words, con_words, tra_words))
         
         if (i + 1) % 500 == 0:
             print(f"  {i + 1}/{combinations} 形態素解析 処理完了...")
 
-    # 2. (後処理) 形態素解析後の全単語リストから、マルコフ連鎖の3単語の組を作成する
-    print("\n形態素解析後のデータからマルコフ連鎖の組を作成します... (後処理)")
-    all_triplets = []
-    for words in all_sentences_as_words:
-        triplets = create_triplets_from_words(words)
-        all_triplets.extend(triplets)
+    print("\n後処理を開始します...")
     
     # ▲▲▲ここまで処理フローを変更▲▲▲
 
+    LINK_TOKEN_RC = "__LINK_Response_Content__"
+    LINK_TOKEN_CT = "__LINK_Content_Transition__"
+
+    all_triplets = []
+    for res_words, con_words, tra_words in all_sentence_parts:
+        full_sequence = ["@BOS@"] + res_words + [LINK_TOKEN_RC] + con_words + [LINK_TOKEN_CT] + tra_words + ["@EOS@"]
+        
+        if len(full_sequence) < 3:
+            continue
+        
+        for i in range(len(full_sequence) - 2):
+            w1, w2, w3 = full_sequence[i], full_sequence[i+1], full_sequence[i+2]
+            all_triplets.append((w1, w2, w3))
+
     print("ユニークな単語リストを作成しています...")
-    all_words = set(["@BOS@", "@EOS@"])
+    all_words = set(["@BOS@", "@EOS@", LINK_TOKEN_RC, LINK_TOKEN_CT])
     for w1, w2, w3 in all_triplets:
         all_words.add(w1)
         all_words.add(w2)
