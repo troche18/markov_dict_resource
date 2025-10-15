@@ -3,11 +3,11 @@ import random
 import configparser
 import sys
 import os
-import json # JSONを扱うために追加
+import json
 from collections import defaultdict
 
 def parse_text_to_words(tagger, text):
-    """MeCabを使って文章を単語のリストに分割する"""
+    """MeCabを使って文章を単語のリストに分割する（シンプルな実装）"""
     node = tagger.parseToNode(text)
     words = []
     while node:
@@ -22,7 +22,7 @@ def create_config_template(config_path):
     config = configparser.ConfigParser()
     config['Files'] = {
         'response_path': 'response.txt',
-        'content_path': 'content.json', # デフォルトを.jsonに変更
+        'content_path': 'content.json',
         'transition_path': 'transition.txt',
         'output_wordlist_path': 'MarkovWordList.txt',
         'output_intdict_path': 'MarkovIntDictionary.txt'
@@ -65,33 +65,23 @@ def main():
 
     try:
         print("テキストファイルとJSONファイルを読み込んでいます...")
-        # responseとtransitionは従来通りテキストファイルから読み込む
+        
         with open(response_path, 'r', encoding='utf-8') as f:
-            response_lines = [line.strip() for line in f if line.strip()]
+            response_lines = [line.strip() for line in f if line.strip()]        
         with open(transition_path, 'r', encoding='utf-8') as f:
             transition_lines = [line.strip() for line in f if line.strip()]
+        
+        with open(content_path, 'r', encoding='utf-8') as f:
+            content_lines = json.load(f)
+        if not isinstance(content_lines, list) or not all(isinstance(item, str) for item in content_lines):
+            raise TypeError("JSONファイルは文字列の配列である必要があります。")
 
-        # ▼▼▼ content の読み込み部分を変更 ▼▼▼
-        try:
-            with open(content_path, 'r', encoding='utf-8') as f:
-                content_lines = json.load(f)
-            # JSONの形式が文字列の配列であることを確認
-            if not isinstance(content_lines, list) or not all(isinstance(item, str) for item in content_lines):
-                raise TypeError("JSONファイルは文字列の配列（[\"文1\", \"文2\", ...\"]の形式）である必要があります。")
-        except json.JSONDecodeError:
-            print(f"エラー: '{content_path}' のJSON形式が正しくありません。", file=sys.stderr)
-            sys.exit(1)
-        except TypeError as e:
-            print(f"エラー: '{content_path}' の内容が不正です。 {e}", file=sys.stderr)
-            sys.exit(1)
-        # ▲▲▲ ここまで変更 ▲▲▲
-
-    except FileNotFoundError as e:
-        print(f"ファイルが見つかりません: {e.filename}", file=sys.stderr)
+    except (FileNotFoundError, json.JSONDecodeError, TypeError) as e:
+        print(f"ファイルの読み込み中にエラーが発生しました: {e}", file=sys.stderr)
         sys.exit(1)
 
     if not all([response_lines, content_lines, transition_lines]):
-        print("エラー: いずれかの入力ファイルが空です。", file=sys.stderr)
+        print("エラー: いずれかの入力ファイルが空か、形式が正しくありません。", file=sys.stderr)
         sys.exit(1)
     
     random.shuffle(response_lines)
@@ -103,13 +93,15 @@ def main():
     len_tra = len(transition_lines)
 
     for i in range(combinations):
-        res = response_lines[i % len_res]
-        tra = transition_lines[i % len_tra]
-        con = random.choice(content_lines)
+        res_phrase = response_lines[i % len_res]
+        tra_phrase = transition_lines[i % len_tra]
+        con_text = random.choice(content_lines)
         
-        res_words = parse_text_to_words(tagger, res)
-        con_words = parse_text_to_words(tagger, con)
-        tra_words = parse_text_to_words(tagger, tra)
+        # responseとtransitionは形態素解析しない
+        res_words = [res_phrase] # 呼びかけと返答を単語リストとして扱う
+        tra_words = [tra_phrase]
+        # contentのみ形態素解析する
+        con_words = parse_text_to_words(tagger, con_text)
         
         all_sentence_parts.append((res_words, con_words, tra_words))
         
@@ -120,10 +112,11 @@ def main():
     
     LINK_TOKEN_RC = "__LINK_Response_Content__"
     LINK_TOKEN_CT = "__LINK_Content_Transition__"
+    LINK_TOKEN_TE = "__LINK_Transition_End__"
 
     all_triplets = []
     for res_words, con_words, tra_words in all_sentence_parts:
-        full_sequence = ["@BOS@"] + res_words + [LINK_TOKEN_RC] + con_words + [LINK_TOKEN_CT] + tra_words + ["@EOS@"]
+        full_sequence = ["@BOS@"] + res_words + [LINK_TOKEN_RC] + con_words + [LINK_TOKEN_CT] + tra_words + [LINK_TOKEN_TE] + ["@EOS@"]
         
         if len(full_sequence) < 3:
             continue
@@ -133,7 +126,7 @@ def main():
             all_triplets.append((w1, w2, w3))
 
     print("ユニークな単語リストを作成しています...")
-    all_words = set(["@BOS@", "@EOS@", LINK_TOKEN_RC, LINK_TOKEN_CT])
+    all_words = set(["@BOS@", "@EOS@", LINK_TOKEN_RC, LINK_TOKEN_CT, LINK_TOKEN_TE])
     for w1, w2, w3 in all_triplets:
         all_words.add(w1)
         all_words.add(w2)
