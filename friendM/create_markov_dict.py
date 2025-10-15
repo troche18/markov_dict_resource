@@ -96,10 +96,22 @@ def main():
     for w1, w2, w3 in all_triplets:
         if w1 == "@BOS@":
             start_word_ids.add(word_to_id[w2])
-
         id1, id2, id3 = word_to_id[w1], word_to_id[w2], word_to_id[w3]
         long_key = (id1 << 32) | id2
         int_markov_data[long_key].append(id3)
+
+    # 重複を除去し、フラット配列を構築
+    print("フラット配列を構築しています...")
+    sorted_keys = sorted(int_markov_data.keys())
+    all_candidates = []  # 全候補を一列に
+    key_info = []  # (key, start_index, length)
+    
+    for key in sorted_keys:
+        unique_candidates = sorted(list(set(int_markov_data[key])))
+        start_index = len(all_candidates)
+        length = len(unique_candidates)
+        all_candidates.extend(unique_candidates)
+        key_info.append((key, start_index, length))
 
     print(f"'{output_wordlist_path}' を書き込んでいます...")
     with open(output_wordlist_path, 'w', encoding='utf-8') as f:
@@ -107,15 +119,20 @@ def main():
 
     print(f"'{output_intdict_path}' を書き込んでいます...")
     with open(output_intdict_path, 'w', encoding='utf-8') as f:
+        # 1行目: 開始単語IDリスト
         f.write(','.join(map(str, sorted(list(start_word_ids)))) + '\n')
-        sorted_keys = sorted(int_markov_data.keys())
-        for key in sorted_keys:
-            value_ids = int_markov_data[key]
+        
+        # 2行目: キー情報
+        for key, start_idx, length in key_info:
             id1 = key >> 32
             id2 = key & 0xFFFFFFFF
-            f.write(f"{id1},{id2}|{','.join(map(str, sorted(list(set(value_ids)))))}\n")
+            f.write(f"{id1},{id2}|{start_idx},{length}\n")
+        
+        # 最終行: 全候補配列
+        f.write(','.join(map(str, all_candidates)) + '\n')
 
     print("\n完了しました！")
+    print(f"メモリ削減効果: 約{len(sorted_keys) * 8 / (1024*1024):.2f}MB削減")
 
 if __name__ == '__main__':
     main()
