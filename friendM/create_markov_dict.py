@@ -12,15 +12,17 @@ def parse_text_to_words(tagger, text):
     words = []
     while node:
         word = node.surface
-        if word and node.posid != 0:
+        # 空文字やBOS/EOSは除外
+        if word and word != 'BOS' and word != 'EOS' and node.posid != 0:
             words.append(word)
         node = node.next
     return words
 
 def create_triplets_from_words(words):
     """単語リストからマルコフ連鎖用の3単語の組を作成する"""
-    if len(words) < 2:
+    if len(words) < 1:
         return []
+    # BOSとEOSを明示的に追加
     tokens = ["@BOS@"] + words + ["@EOS@"]
     triplets = []
     for i in range(len(tokens) - 2):
@@ -80,34 +82,58 @@ def main():
         triplets = create_triplets_from_words(words)
         all_triplets.extend(triplets)
 
-    print("ユニークな単語リストを作成しています...")
-    all_words = set(["@BOS@", "@EOS@"])
-    for w1, w2, w3 in all_triplets:
-        all_words.add(w1)
-        all_words.add(w2)
-        all_words.add(w3)
+    print("BOS/EOSを固定IDにマッピング...")
+    # BOSを0、EOSを1に固定
+    word_to_id = {
+        "@BOS@": 0,
+        "@EOS@": 1
+    }
+    id_to_word = ["@BOS@", "@EOS@"]
     
-    id_to_word = sorted(list(all_words))
-    word_to_id = {word: i for i, word in enumerate(id_to_word)}
+    # 通常の単語を追加
+    unique_words = set()
+    for w1, w2, w3 in all_triplets:
+        unique_words.add(w1)
+        unique_words.add(w2)
+        unique_words.add(w3)
+    
+    # BOS/EOSを除く
+    unique_words.discard("@BOS@")
+    unique_words.discard("@EOS@")
+    
+    # 通常の単語にIDを割り当て
+    for word in sorted(unique_words):
+        word_to_id[word] = len(word_to_id)
+        id_to_word.append(word)
+    
+    print(f"単語数: {len(id_to_word)} (BOS/EOS含む)")
 
     print("整数ベースの辞書を構築しています...")
-    int_markov_data = defaultdict(list)
-    start_word_ids = set()
+    markov_chain = defaultdict(list)
+    # (BOS,BOS)からの遷移を特別に記録
+    start_word_ids = []
+    
     for w1, w2, w3 in all_triplets:
-        if w1 == "@BOS@":
-            start_word_ids.add(word_to_id[w2])
         id1, id2, id3 = word_to_id[w1], word_to_id[w2], word_to_id[w3]
-        long_key = (id1 << 32) | id2
-        int_markov_data[long_key].append(id3)
+        
+        # (BOS,BOS)からの遷移を記録
+        if w1 == "@BOS@" and w2 == "@BOS@":
+            start_word_ids.append(id3)
+        
+        # マルコフ連鎖データに追加
+        markov_chain[(id1, id2)].append(id3)
 
     # 重複を除去し、フラット配列を構築
     print("フラット配列を構築しています...")
-    sorted_keys = sorted(int_markov_data.keys())
+    # キーをソートして一貫性を確保
+    sorted_keys = sorted(markov_chain.keys())
+    
     all_candidates = []  # 全候補を一列に
     key_info = []  # (key, start_index, length)
     
     for key in sorted_keys:
-        unique_candidates = sorted(list(set(int_markov_data[key])))
+        # 重複除去とソート
+        unique_candidates = sorted(list(set(markov_chain[key])))
         start_index = len(all_candidates)
         length = len(unique_candidates)
         all_candidates.extend(unique_candidates)
@@ -119,20 +145,21 @@ def main():
 
     print(f"'{output_intdict_path}' を書き込んでいます...")
     with open(output_intdict_path, 'w', encoding='utf-8') as f:
-        # 1行目: 開始単語IDリスト
-        f.write(','.join(map(str, sorted(list(start_word_ids)))) + '\n')
+        # 1行目: 開始単語IDリスト（(BOS,BOS)からの遷移）
+        f.write(','.join(map(str, start_word_ids)) + '\n')
         
-        # 2行目: キー情報
-        for key, start_idx, length in key_info:
-            id1 = key >> 32
-            id2 = key & 0xFFFFFFFF
+        # 2行目以降: キー情報
+        for (id1, id2), start_idx, length in key_info:
             f.write(f"{id1},{id2}|{start_idx},{length}\n")
         
         # 最終行: 全候補配列
-        f.write(','.join(map(str, all_candidates)) + '\n')
+        f.write(','.join(map(str, all_candidates)))
 
     print("\n完了しました！")
-    print(f"メモリ削減効果: 約{len(sorted_keys) * 8 / (1024*1024):.2f}MB削減")
+    print(f"単語数: {len(id_to_word)}")
+    print(f"遷移数: {len(key_info)}")
+    print(f"候補単語数: {len(all_candidates)}")
+    print(f"推定メモリ使用量: 約{len(key_info) * 8 / (1024*1024):.2f}MB")
 
 if __name__ == '__main__':
     main()
